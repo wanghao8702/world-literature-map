@@ -1,0 +1,1187 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>世界文学巡礼 · 3D 文学地图脚手架</title>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital@0;1&family=Noto+Serif+SC:wght@400;600;700&display=swap" rel="stylesheet">
+
+<style>
+  :root{
+    --paper:#e6d8ba;        /* 纸 */
+    --paper-deep:#d8c39a;
+    --ink:#3a2c1e;          /* 墨 */
+    --ink-soft:#6a5640;
+    --seal:#a7382c;         /* 朱砂 */
+    --seal-deep:#8a2c22;
+    --gold:#9c7c2e;         /* 描金 */
+    --haze:#d9c8a3;
+    --line:rgba(58,44,30,.18);
+    /* 底图氛围变量（写实风固定值）：地平线渐变 / 暗角 / 色罩 */
+    --canvas-bg:linear-gradient(180deg,#cdbb97 0%,#d9c8a3 38%,#e6d8ba 100%);
+    --vig-shadow:inset 0 0 240px 40px rgba(58,44,30,.34);
+    --vig-tint:radial-gradient(120% 80% at 50% -10%, rgba(255,250,235,.35), transparent 60%);
+    --tint:rgba(0,0,0,0);   /* 皮肤色罩：墨/褐色调（叠在地图与标记上，做旧/水墨用） */
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--paper);font-family:"Noto Serif SC","Songti SC","STSong","Source Han Serif SC",serif;color:var(--ink);overflow:hidden}
+  #map{position:fixed;inset:0}
+  /* 让地平线以上呈现旧纸/晨雾的渐变，作为 sky 的兜底（颜色随皮肤切换） */
+  #map .maplibregl-canvas{background:var(--canvas-bg)}
+
+  /* 暗角 + 纸纹氛围层（不挡操作）。
+     去掉了原先的 mix-blend-mode:multiply —— 它会逼迫整屏每帧重新混合，是被禁止的性能反模式。
+     改用纯 box-shadow + radial-gradient（静态合成），暗角强度/色调由皮肤变量控制。 */
+  .vignette{position:fixed;inset:0;pointer-events:none;z-index:5;
+    box-shadow:var(--vig-shadow);
+    background:var(--vig-tint)}
+  /* 皮肤色罩：盖在地图画布之上、UI 之下（z=4）。纯半透明纯色，静态合成，无 blend-mode/blur。
+     地图与书脊标记会被染色（统一做旧观感），书卡/顶栏/胶囊在更高层不受影响。 */
+  .tint{position:fixed;inset:0;pointer-events:none;z-index:4;background:var(--tint);transition:background .35s}
+
+  /* 顶栏标题 */
+  .topbar{position:fixed;left:0;right:0;top:max(14px,env(safe-area-inset-top));z-index:10;
+    text-align:center;pointer-events:none}
+  .topbar h1{margin:0;font-weight:700;letter-spacing:.42em;font-size:23px;
+    color:var(--ink);text-shadow:0 1px 0 rgba(255,250,235,.5);text-indent:.42em}
+  .topbar .sub{margin-top:7px;font-size:12.5px;letter-spacing:.18em;color:var(--ink-soft)}
+  .topbar .sub b{color:var(--seal-deep);font-weight:700}
+  .topbar .rule{width:54px;height:1px;background:var(--gold);margin:9px auto 0;opacity:.7}
+
+  /* 搜索框 + 结果下拉（ISSUE-09）。无毛玻璃。 */
+  .search{position:fixed;left:50%;transform:translateX(-50%);z-index:11;
+    top:calc(max(14px,env(safe-area-inset-top)) + 72px);width:min(330px,calc(100vw - 130px))}
+  .search input{width:100%;font:inherit;font-size:13px;color:var(--ink);
+    border:1px solid var(--line);background:rgba(230,216,186,.92);border-radius:24px;
+    padding:8px 15px;outline:none;box-shadow:0 6px 18px rgba(58,44,30,.18)}
+  .search input:focus{border-color:var(--gold)}
+  .search input::placeholder{color:var(--ink-soft)}
+  .search-results{margin-top:6px;max-height:48vh;overflow:auto;display:none;
+    background:linear-gradient(180deg,#efe3c8,#e6d5af);border:1px solid var(--gold);
+    border-radius:12px;box-shadow:0 14px 32px rgba(40,28,16,.34)}
+  .search-results.show{display:block}
+  .sr-item{display:flex;flex-direction:column;gap:1px;width:100%;text-align:left;border:0;
+    background:transparent;cursor:pointer;padding:8px 14px;font:inherit;transition:.12s;
+    border-bottom:1px solid rgba(58,44,30,.08)}
+  .sr-item:last-child{border-bottom:0}
+  .sr-item:hover{background:rgba(167,56,44,.1)}
+  .sr-t{font-size:13.5px;color:var(--ink);font-weight:600}
+  .sr-m{font-size:11px;color:var(--ink-soft)}
+  .sr-empty{padding:9px 14px;font-size:12px;color:var(--ink-soft)}
+  body.story-on .search{display:none}   /* 故事模式下隐藏搜索 */
+
+  /* 天气切换（右上角） */
+  .weather{position:fixed;right:12px;top:max(14px,calc(env(safe-area-inset-top) + 4px));z-index:11;
+    display:flex;gap:6px;background:rgba(230,216,186,.9);
+    border:1px solid var(--line);border-radius:30px;padding:5px;box-shadow:0 6px 18px rgba(58,44,30,.18)}
+  .weather button{border:0;background:transparent;font:inherit;font-size:15px;width:34px;height:30px;
+    border-radius:24px;cursor:pointer;color:var(--ink-soft);transition:.2s}
+  .weather button.on{background:var(--ink);color:var(--paper)}
+
+  /* 性能模式开关（ISSUE-07，右上角天气之下） */
+  .perf{position:fixed;right:12px;top:calc(max(14px,env(safe-area-inset-top)) + 46px);z-index:11}
+  .perf button{font:inherit;font-size:12.5px;letter-spacing:.04em;border:1px solid var(--line);
+    background:rgba(230,216,186,.9);color:var(--ink);padding:7px 12px;border-radius:24px;cursor:pointer;
+    box-shadow:0 6px 18px rgba(58,44,30,.18);transition:.2s}
+  .perf button.flat{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+
+  /* 底部胶囊：地区筛选 + 巡游 */
+  .dock{position:fixed;left:0;right:0;bottom:max(16px,env(safe-area-inset-bottom));z-index:10;
+    display:flex;justify-content:center}
+  .chips{display:flex;gap:7px;flex-wrap:wrap;justify-content:center;max-width:560px;padding:0 12px;align-items:center}
+  .chip{font:inherit;font-size:13px;letter-spacing:.06em;border:1px solid var(--line);
+    background:rgba(230,216,186,.9);color:var(--ink);
+    padding:8px 14px;border-radius:30px;cursor:pointer;transition:.18s;box-shadow:0 4px 12px rgba(58,44,30,.14)}
+  .chip:hover{transform:translateY(-1px)}
+  .chip.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+  .chip.tour{background:var(--seal);color:#f6e9d2;border-color:var(--seal-deep);font-weight:600}
+  .chip.tour.running{background:var(--seal-deep)}
+
+  /* 时间轴（ISSUE-04）：当前隐藏（应需求）。如需恢复改回 display:flex 即可。 */
+  .timeline{display:none;position:fixed;left:0;right:0;z-index:10;justify-content:center;
+    bottom:calc(max(16px,env(safe-area-inset-bottom)) + 48px);padding:0 12px;pointer-events:none}
+  .tl{pointer-events:auto;display:flex;align-items:center;gap:10px;width:100%;max-width:520px;
+    background:rgba(230,216,186,.9);border:1px solid var(--line);border-radius:30px;
+    padding:6px 12px;box-shadow:0 6px 18px rgba(58,44,30,.18)}
+  .tl-btn{flex:0 0 auto;border:0;background:transparent;font:inherit;font-size:14px;width:30px;height:30px;
+    border-radius:50%;cursor:pointer;color:var(--ink);transition:.18s;line-height:1}
+  .tl-btn:hover{background:rgba(58,44,30,.1)}
+  .tl-btn.on{background:var(--seal);color:#f6e9d2}
+  .tl-range{flex:1 1 auto;min-width:0;-webkit-appearance:none;appearance:none;height:4px;border-radius:3px;
+    background:linear-gradient(90deg,var(--gold),var(--seal));outline:none;cursor:pointer}
+  .tl-range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:16px;height:16px;border-radius:50%;
+    background:var(--ink);border:2px solid var(--paper);cursor:pointer;box-shadow:0 1px 3px rgba(40,28,16,.4)}
+  .tl-range::-moz-range-thumb{width:15px;height:15px;border-radius:50%;
+    background:var(--ink);border:2px solid var(--paper);cursor:pointer}
+  .tl-year{flex:0 0 auto;font-size:12.5px;color:var(--ink);letter-spacing:.03em;
+    min-width:78px;text-align:center;font-variant-numeric:tabular-nums}
+
+  /* 故事按钮：墨色实心，和巡游区分 */
+  .chip.story-chip{background:var(--ink);color:var(--paper);border-color:var(--ink);font-weight:600}
+
+  /* 故事模式下隐藏底栏胶囊 + 时间轴（让位给旁白面板） */
+  body.story-on .dock, body.story-on .timeline{display:none}
+
+  /* 旁白面板（ISSUE-06）：底部居中，纸卷质感，无毛玻璃 */
+  .story-panel{position:fixed;left:50%;transform:translateX(-50%);z-index:13;
+    bottom:max(18px,env(safe-area-inset-bottom));width:min(560px,calc(100vw - 28px));
+    background:linear-gradient(180deg,#efe3c8,#e3d2ab);border:1px solid var(--gold);
+    border-radius:14px;box-shadow:0 18px 44px rgba(40,28,16,.42);padding:16px 18px 14px}
+  .story-panel[hidden]{display:none}
+  .story-panel .story-x{position:absolute;right:12px;top:10px;border:0;background:transparent;
+    font-size:16px;color:var(--ink-soft);cursor:pointer;line-height:1}
+  .story-idx{font-family:"EB Garamond",serif;font-size:12px;letter-spacing:.16em;color:var(--seal-deep);font-weight:700}
+  .story-title{font-size:18px;font-weight:700;color:var(--ink);margin:3px 0 7px;letter-spacing:.04em}
+  .story-text{font-size:14px;line-height:1.78;color:#4a3a28;margin-bottom:13px}
+  .story-nav{display:flex;gap:8px;justify-content:space-between;align-items:center}
+  .story-nav button{font:inherit;font-size:13px;border:1px solid var(--line);background:rgba(255,250,235,.5);
+    color:var(--ink);padding:7px 14px;border-radius:24px;cursor:pointer;transition:.18s}
+  .story-nav button:hover{background:rgba(255,250,235,.85)}
+  .story-nav #storyPlay{flex:0 0 auto}
+  .story-nav #storyPlay.on{background:var(--seal);color:#f6e9d2;border-color:var(--seal-deep)}
+
+  /* 印章式标记自 ISSUE-02 起改由 GPU symbol 图层渲染（canvas 烘焙图标），不再用 DOM 元素 */
+
+  /* 书卡：浮动定位（left/top 由 JS 按被点书目的屏幕坐标实时计算） */
+  .card{position:fixed;left:0;top:0;z-index:12;width:min(330px,calc(100vw - 24px));
+    background:linear-gradient(180deg,#efe3c8,#e3d2ab);border:1px solid var(--gold);
+    border-radius:14px;box-shadow:0 18px 44px rgba(40,28,16,.4);padding:15px;
+    display:flex;gap:14px;transform:translateY(18px) scale(.97);opacity:0;pointer-events:none;
+    transition:transform .3s cubic-bezier(.2,.8,.2,1),opacity .3s}
+  .card.show{transform:none;opacity:1;pointer-events:auto}
+  .card .cover{flex:0 0 78px;height:112px;border-radius:5px;position:relative;overflow:hidden;
+    box-shadow:0 6px 14px rgba(40,28,16,.4);background:#2a2018}
+  .card .cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none}
+  .card .cover .t{position:absolute;inset:0;display:grid;place-items:center;padding:8px;text-align:center;
+    color:#f1e4c8;font-size:13px;line-height:1.35;font-weight:600;letter-spacing:.04em}
+  .card .cover .band{position:absolute;left:0;right:0;bottom:0;height:5px;background:var(--gold);z-index:1}
+  .card .info{flex:1;min-width:0}
+  .card .title{font-size:18px;font-weight:700;margin:1px 0 2px;line-height:1.25}
+  .card .en{font-family:"EB Garamond",serif;font-style:italic;font-size:12.5px;color:var(--ink-soft);margin-bottom:7px}
+  .card .meta{font-size:12px;color:var(--ink-soft);display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+  .card .meta .dot{opacity:.5}
+  .card .rate{color:var(--seal-deep);font-weight:700;font-family:"EB Garamond",serif;font-size:13.5px}
+  .card .blurb{font-size:13.5px;line-height:1.62;color:#4a3a28}
+  .card .quote{margin-top:9px;padding-left:10px;border-left:2px solid var(--gold);
+    font-size:12.5px;line-height:1.7;color:var(--ink-soft);font-style:italic}
+  .card .quote[hidden]{display:none}
+  .card .close{position:absolute;right:10px;top:8px;border:0;background:transparent;font-size:18px;
+    color:var(--ink-soft);cursor:pointer;line-height:1}
+
+  .credit{position:fixed;right:10px;bottom:6px;z-index:6;font-size:10px;color:rgba(58,44,30,.45);
+    pointer-events:none;letter-spacing:.04em}
+
+  /* 罗盘玫瑰（ISSUE-10）：右下导航控件之上方 */
+  .compass{position:fixed;right:14px;z-index:7;width:62px;height:62px;padding:0;border:0;cursor:pointer;
+    bottom:calc(max(16px,env(safe-area-inset-bottom)) + 120px);
+    background:radial-gradient(circle at 50% 50%, rgba(239,227,200,.82), rgba(230,216,186,.62) 70%, transparent 72%);
+    border-radius:50%;box-shadow:0 4px 14px rgba(40,28,16,.28);transition:transform .2s}
+  .compass:hover{transform:scale(1.06)}
+  .compass svg{width:100%;height:100%;display:block;transition:transform .15s linear}
+
+  #weather{position:fixed;inset:0;z-index:8;pointer-events:none}
+
+  /* 加载 / 错误 浮层（不使用毛玻璃/混合模式，遵守性能约定） */
+  .status{position:fixed;inset:0;z-index:30;display:grid;place-items:center;
+    background:radial-gradient(120% 120% at 50% 40%, rgba(230,216,186,.92), rgba(205,187,151,.96))}
+  .status[hidden]{display:none}
+  .status-box{text-align:center;color:var(--ink);max-width:300px;padding:0 20px}
+  .status-spin{width:30px;height:30px;margin:0 auto 16px;border-radius:50%;
+    border:2.5px solid var(--line);border-top-color:var(--seal);animation:spin .9s linear infinite}
+  .status.error .status-spin{display:none}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .status-msg{font-size:15px;letter-spacing:.12em;font-weight:600}
+  .status-hint{margin-top:9px;font-size:12px;line-height:1.7;color:var(--ink-soft);letter-spacing:.02em}
+  .status-retry{margin-top:16px;font:inherit;font-size:13px;border:1px solid var(--seal-deep);
+    background:var(--seal);color:#f6e9d2;padding:8px 20px;border-radius:30px;cursor:pointer}
+  .status-retry[hidden]{display:none}
+
+  @media (max-width:480px){
+    .topbar h1{font-size:19px;letter-spacing:.3em}
+  }
+</style>
+
+<div id="map"></div>
+<canvas id="weather"></canvas>
+<div class="tint"></div>
+<div class="vignette"></div>
+
+<!-- 罗盘玫瑰（ISSUE-10）：随地图旋转，点击回正北 -->
+<button class="compass" id="compass" title="点击回正北">
+  <svg viewBox="0 0 100 100" id="compassRose" aria-hidden="true">
+    <circle cx="50" cy="50" r="46" fill="none" stroke="#9c7c2e" stroke-width="1.4" opacity=".7"/>
+    <circle cx="50" cy="50" r="38" fill="none" stroke="#9c7c2e" stroke-width=".6" opacity=".5"/>
+    <polygon points="50,7 56,50 50,46 44,50" fill="#a7382c"/>
+    <polygon points="50,93 44,50 50,54 56,50" fill="#3a2c1e"/>
+    <polygon points="7,50 50,44 46,50 50,56" fill="#6a5640"/>
+    <polygon points="93,50 50,56 54,50 50,44" fill="#6a5640"/>
+    <text x="50" y="20" text-anchor="middle" font-size="11" font-weight="700" fill="#a7382c" font-family="EB Garamond,serif">N</text>
+  </svg>
+</button>
+
+<!-- 加载 / 错误 状态浮层（ISSUE-01） -->
+<div class="status" id="status" hidden>
+  <div class="status-box">
+    <div class="status-spin" id="statusSpin"></div>
+    <div class="status-msg" id="statusMsg"></div>
+    <div class="status-hint" id="statusHint"></div>
+    <button class="status-retry" id="statusRetry" hidden>重新加载</button>
+  </div>
+</div>
+
+<div class="topbar">
+  <h1>世界文学巡礼</h1>
+  <div class="sub">跨越 <b id="ctyN">–</b> 国 · 收录 <b id="bookN">–</b> 部名著</div>
+  <div class="rule"></div>
+</div>
+
+<div class="search" id="search">
+  <input type="text" id="searchInput" placeholder="搜索书名 / 作者 / 国家…" autocomplete="off" spellcheck="false">
+  <div class="search-results" id="searchResults"></div>
+</div>
+
+<div class="weather">
+  <button data-w="clear" class="on" title="晴">☀</button>
+  <button data-w="rain" title="雨">☂</button>
+  <button data-w="snow" title="雪">❄</button>
+</div>
+
+<div class="perf"><button id="perfBtn" title="切换 3D 地形 / 流畅平面">3D 地形</button></div>
+
+<div class="card" id="card">
+  <button class="close" id="cardClose">×</button>
+  <div class="cover"><img id="cvImg" alt=""><div class="t" id="cvT"></div><div class="band"></div></div>
+  <div class="info">
+    <div class="title" id="ctTitle"></div>
+    <div class="en" id="ctEn"></div>
+    <div class="meta" id="ctMeta"></div>
+    <div class="blurb" id="ctBlurb"></div>
+    <div class="quote" id="ctQuote"></div>
+  </div>
+</div>
+
+<div class="timeline" id="timeline">
+  <div class="tl">
+    <button class="tl-btn" id="tlPlay" title="播放 / 暂停">▶</button>
+    <input type="range" id="tlRange" class="tl-range" min="0" max="0" value="0" step="1" aria-label="年份时间轴">
+    <span class="tl-year" id="tlYear">全部</span>
+    <button class="tl-btn" id="tlReset" title="重置（全部年代）">⟳</button>
+  </div>
+</div>
+
+<div class="dock"><div class="chips" id="chips"></div></div>
+
+<!-- 故事 / 章节旁白面板（ISSUE-06） -->
+<div class="story-panel" id="story" hidden>
+  <button class="story-x" id="storyX" title="退出故事">✕</button>
+  <div class="story-idx" id="storyIdx"></div>
+  <div class="story-title" id="storyTitle"></div>
+  <div class="story-text" id="storyText"></div>
+  <div class="story-nav">
+    <button id="storyPrev">‹ 上一章</button>
+    <button id="storyPlay">▶ 自动</button>
+    <button id="storyNext">下一章 ›</button>
+  </div>
+</div>
+<div class="credit">脚手架 · MapLibre GL + Esri 物理图 + 3D 地形</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.js"></script>
+<script>
+/* ============================================================================
+   世界文学巡礼 —— 3D 文学地图脚手架
+   把书籍数据换成你自己的，把贴图/地形/天气换成 Mapbox 即可上线。
+   ============================================================================ */
+
+/* ① 【换数据】书目数据已抽离为外部 books.geojson，运行时 fetch 加载（ISSUE-01）。
+   规模化到 1000+ 本时只改数据文件即可；后续配合 ISSUE-02 聚合 + 懒加载。
+   注意：用 file:// 直接双击打开时，部分浏览器会因 CORS 拦截 fetch 本地文件，
+   届时请用本地静态服务器（如 `python -m http.server`）打开，或托管后访问。 */
+const DATA_URL = 'books.geojson';          // 地理索引层（坐标 + 基础元数据）
+const CONTENT_URL = 'books-content.json';   // 富内容层（简介/精彩段落/封面/外链，按 id 关联）
+let books = [];   // 加载完成后填充
+
+/* GeoJSON Feature → 内部书对象（geometry.coordinates → coord，properties 平铺映射） */
+function featureToBook(f){
+  const p = (f && f.properties) || {};
+  const coord = (f && f.geometry && f.geometry.coordinates) || [0,0];
+  return {
+    id: p.id,
+    t: p.title || '（无题）',
+    en: p.title_en || '',
+    a: p.author || '',
+    y: p.year,
+    century: p.century,
+    country: p.country || '',
+    city: p.city || '',
+    coord,
+    r: (typeof p.rating === 'number') ? p.rating : null,
+    region: p.region || '',
+    themes: Array.isArray(p.themes) ? p.themes : [],
+    d: p.blurb || '',
+    quote: p.quote || '',
+    cover: p.cover || '',
+    links: p.links || {},
+    tour_order: (typeof p.tour_order === 'number') ? p.tour_order : null
+  };
+}
+
+/* 地区筛选项（底栏胶囊） */
+const regions = ["全部","亚洲","欧洲","美洲","中东·非洲"];
+let activeRegion = "全部";
+
+/* 时间轴状态（ISSUE-04）：仅显示出版年 ≤ activeYear 的书；showAllYears=滑到最右=全部年代 */
+let yearMin = 0, yearMax = 0, activeYear = 0, showAllYears = true;
+
+/* 头部统计（数据加载后调用，由结果动态计算） */
+function renderStats(){
+  document.getElementById('bookN').textContent = books.length;
+  document.getElementById('ctyN').textContent =
+    new Set(books.map(b=>b.country).filter(Boolean)).size;
+}
+
+/* ============================ 地图初始化 ============================ */
+const map = new maplibregl.Map({
+  container:'map',
+  /* ② 【换贴图】这层 Esri“世界物理图”给出免费的旧纸/自然地貌质感。
+     上线时换成你的 Mapbox 自定义 style，或一张地理配准过的手绘/AI 水墨贴图。 */
+  style:{
+    version:8,
+    /* 字形：簇数字等拉丁文本用 openmaptiles 免费字形服务；
+       CJK（印章/标签汉字）走下方 localIdeographFontFamily 本地渲染，无需下载海量字形。 */
+    glyphs:'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
+    sources:{
+      physical:{
+        type:'raster',
+        tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Physical_Map/MapServer/tile/{z}/{y}/{x}'],
+        tileSize:256, maxzoom:8, attribution:'Tiles © Esri'
+      },
+      /* ③ 【换地形】免费高程 DEM。
+         原 demotiles.maplibre.org/terrain-tiles 已失效（瓦片 404 + “Unimplemented type: 4”解码报错），
+         改用业界常用的 AWS Terrarium 高程瓦片（terrarium 编码，需显式声明 encoding）。
+         Mapbox 版改成 raster-dem 源 mapbox://mapbox.mapbox-terrain-dem-v1（需 token）。
+         注：国内访问 AWS 可能较慢/被墙；取不到时地图会自动退化为平面，不影响其余功能。 */
+      terrainSource:{
+        type:'raster-dem',
+        tiles:['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+        encoding:'terrarium',
+        tileSize:256, maxzoom:14, attribution:'Terrain © Mapzen / AWS'
+      }
+    },
+    layers:[
+      {id:'sky-bg', type:'background', paint:{'background-color':'#d9c8a3'}},
+      {id:'physical', type:'raster', source:'physical',
+       paint:{'raster-saturation':-0.18,'raster-contrast':0.08,'raster-brightness-max':0.96}}
+    ]
+    /* 开场不挂 terrain：默认平面起步（避免 DEM 失败卡顿）。点「3D 地形」按钮才按需 setTerrain。 */
+  },
+  center:[28,32], zoom:2.0, pitch:0, bearing:0, maxPitch:80,   // 开场：从太空正俯视（平面、无地形）
+  attributionControl:false, dragRotate:true,
+  localIdeographFontFamily:"'Noto Serif SC','Songti SC','STSong',serif"
+});
+map.addControl(new maplibregl.NavigationControl({visualizePitch:true}), 'bottom-right');
+
+/* DEM 高程源在部分网络环境下取不到/解不出（如国内访问 AWS 被拦截，返回非 PNG 内容），
+   会反复抛 'Unimplemented type: 4' 并刷屏。一旦出现就关掉 3D 地形：地图退化为平面
+   （俯仰角仍在，仍是斜视视角），其余功能不受影响。网络正常的用户照常获得地形。 */
+let terrainDisabled = false;
+map.on('error', (e)=>{
+  const msg = (e && e.error && e.error.message) || '';
+  if(terrainDisabled) return;
+  if(msg.includes('Unimplemented type') || e.sourceId === 'terrainSource'){
+    terrainDisabled = true;
+    try{ map.setTerrain(null); }catch(_){}
+    if(typeof markTerrainOff === 'function') markTerrainOff();   // 同步性能开关 UI 为"平面"
+    console.warn('[terrain] DEM 源不可用，已关闭 3D 地形（地图转为平面）。');
+  }
+});
+
+map.on('load', ()=>{
+  // 试着加一层 sky（部分版本支持），失败也不影响——上方有 CSS 渐变兜底
+  try{
+    map.setSky({
+      'sky-color':'#bcd0e0','horizon-color':'#e6d8ba','fog-color':'#d9c8a3',
+      'sky-horizon-blend':0.6,'horizon-fog-blend':0.5,'fog-ground-blend':0.4
+    });
+  }catch(e){/* 老版本无 setSky，忽略 */}
+  // 应用记忆的性能模式（ISSUE-07）：默认 3D；曾选"平面"则关地形（相机交给下面的开场动画处理，不在此 ease）
+  // 开场即平面（style 已不挂地形）；仅当用户曾手动选过 3D 才尝试加载地形
+  if(prefGet('perfMode') === '3d') setPerf('3d', false);
+  updatePerfBtn();
+  loadBooks();
+});
+
+/* ============================ 数据加载（ISSUE-01） ============================ */
+async function loadBooks(){
+  showLoading('正在展卷……');
+  try{
+    const res = await fetch(DATA_URL, {cache:'no-cache'});
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    const gj = await res.json();
+    const feats = (gj && gj.features) || [];
+    if(!feats.length) throw new Error('数据为空');
+    books = feats.map(featureToBook).filter(b=>Array.isArray(b.coord) && b.coord.length===2);
+    byId = new Map(books.map(b=>[b.id, b]));
+    await loadContent();     // 合并富内容（简介/精彩段落/封面/外链）
+    renderStats();
+    renderBooks();
+    initTimeline();
+    hideLoading();
+    applyHash();        // 深链定位（ISSUE-09）：带 #book=ID 打开时自动弹卡
+  }catch(err){
+    console.error('[literary-map] 加载 books.geojson 失败：', err);
+    showError(err);
+  }
+}
+
+/* 富内容：按 id 合并到书对象（books-content.json）。非致命——缺失只是没有封面/段落，不影响地图。 */
+async function loadContent(){
+  try{
+    const res = await fetch(CONTENT_URL, {cache:'no-cache'});
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    books.forEach(b=>{
+      const c = data[b.id]; if(!c) return;
+      if(c.blurb != null) b.d = c.blurb;
+      if(c.quote != null) b.quote = c.quote;
+      if(c.cover != null) b.cover = c.cover;
+      if(c.links != null) b.links = c.links;
+    });
+  }catch(err){
+    console.warn('[content] 加载 books-content.json 失败（书卡将缺少封面/简介/段落）：', err);
+  }
+}
+
+/* 状态浮层控制 */
+const statusEl   = document.getElementById('status');
+const statusMsg  = document.getElementById('statusMsg');
+const statusHint = document.getElementById('statusHint');
+const statusRetry= document.getElementById('statusRetry');
+function showLoading(msg){
+  statusEl.classList.remove('error');
+  statusEl.hidden = false;
+  statusMsg.textContent = msg || '加载中……';
+  statusHint.textContent = '';
+  statusRetry.hidden = true;
+}
+function hideLoading(){ statusEl.hidden = true; }
+function showError(err){
+  statusEl.classList.add('error');
+  statusEl.hidden = false;
+  statusMsg.textContent = '书目数据加载失败';
+  statusHint.innerHTML =
+    `无法读取 <b>${DATA_URL}</b>（${(err && err.message) || err}）。<br>`+
+    `若是直接双击打开本文件，请改用本地静态服务器，例如：<br>`+
+    `<b>python -m http.server</b> 后访问 <b>localhost:8000</b>。`;
+  statusRetry.hidden = false;
+}
+statusRetry.addEventListener('click', loadBooks);
+
+/* ============================ 标记：GeoJSON 聚合源 + GPU 图层（ISSUE-02） ============================
+   不再为每本书创建 DOM Marker（1000+ 时会卡）。改用一个带 cluster 的 GeoJSON 源：
+   - clusters：圆形簇 + 数量徽标
+   - unclustered：单点印章（用 canvas 烘焙的“印章图标”，保留原朱砂质感，含汉字）
+   - active-glow：当前选中书目的描金高亮环
+   筛选 = 重算过滤后的 FeatureCollection 后 source.setData，簇数量随之正确更新。 */
+let byId = new Map();                 // id → 书对象，单点点击时反查
+const FC_EMPTY = {type:'FeatureCollection', features:[]};
+
+/* 书对象 → GeoJSON Feature（携带“书脊”图标 id） */
+function bookToFeature(b){
+  return {type:'Feature', geometry:{type:'Point', coordinates:b.coord},
+    properties:{id:b.id, icon:spineId(b), region:b.region, year:b.y}};
+}
+/* 可见集 = 地区筛选 ∩ 时间轴（ISSUE-04） */
+function inTime(b){ return showAllYears || typeof b.y!=='number' || b.y <= activeYear; }
+function visibleList(){ return books.filter(b=> inRegion(b) && inTime(b)); }
+function currentFC(){
+  return {type:'FeatureCollection', features: visibleList().map(bookToFeature)};
+}
+/* 重建聚合源数据；播放时按"可见数量是否变化"跳过无谓的 setData（应对 1000+ 规模） */
+let _lastVisibleCount = -1;
+function refreshSource(force){
+  const s = map.getSource('books-src'); if(!s) return;
+  const list = visibleList();
+  if(!force && list.length === _lastVisibleCount) return;
+  _lastVisibleCount = list.length;
+  s.setData({type:'FeatureCollection', features:list.map(bookToFeature)});
+  refreshArcs(list);     // 连线随可见节点同步（ISSUE-05）
+}
+
+/* —— canvas 烘焙“书脊/题签”图标 ——
+   每本书一张：深色书函封面 + 奶白题签 + 竖排墨字全书名 + 底部朱砂小印。
+   按书 id 缓存；选中态(active)换描金边变体。竖排整书名 → 辨识度高、有古籍艺术感。 */
+const spineImages = new Set();
+function spineId(b){ return 'spine-' + b.id; }
+function spineActiveId(b){ return 'spine-' + b.id + '-on'; }
+function ensureSpine(b, active){
+  const id = active ? spineActiveId(b) : spineId(b);
+  if(spineImages.has(id)) return id;
+  if(map.hasImage(id)){ spineImages.add(id); return id; }
+  map.addImage(id, drawSpine(b.t, active), {pixelRatio:2});
+  spineImages.add(id);
+  return id;
+}
+function drawSpine(title, active){
+  const RS = 2;                                   // 渲染 2x，配合 pixelRatio:2
+  let chars = [...((title||'·').trim())];
+  const MAX = 9;
+  if(chars.length > MAX){ chars = chars.slice(0, MAX-1); chars.push('…'); }
+  const cs = 17, lh = cs*1.16;                    // 字号 / 行高（逻辑像素）
+  const sidePad = 7, padTop = 8, padBottom = 8;
+  const sealGap = 5, sealW = 9;                   // 墨字与朱砂小印之间的间距 / 印的尺寸
+  const W = cs + sidePad*2;
+  const textH = chars.length*lh;
+  const H = padTop + textH + sealGap + sealW + padBottom;
+
+  const cv = document.createElement('canvas');
+  cv.width = W*RS; cv.height = H*RS;
+  const g = cv.getContext('2d'); g.scale(RS,RS);
+
+  // ① 题签（半透明奶白纸条，无深色外框）
+  const label = g.createLinearGradient(0,0,0,H);
+  label.addColorStop(0,'rgba(241,229,204,.82)'); label.addColorStop(1,'rgba(224,206,166,.82)');
+  roundRect(g, 0.6, 0.6, W-1.2, H-1.2, 5); g.fillStyle = label; g.fill();
+  // 极细描边：常态低调暖色，选中态描金高亮（非黑框）
+  g.lineWidth = active ? 2 : 1;
+  g.strokeStyle = active ? '#d8b24e' : 'rgba(120,96,60,.45)';
+  roundRect(g, 0.6, 0.6, W-1.2, H-1.2, 5); g.stroke();
+
+  // ② 竖排墨字书名
+  g.fillStyle = '#2c2014';
+  g.font = `600 ${cs}px "Noto Serif SC","Songti SC","STSong",serif`;
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  const cx = W/2, top = padTop + lh/2;
+  chars.forEach((ch,i)=> g.fillText(ch, cx, top + i*lh));
+
+  // ③ 底部朱砂小印（红色点睛，呼应古籍钤印）
+  const sx = (W-sealW)/2, sy = padTop + textH + sealGap;
+  const seal = g.createLinearGradient(sx,sy,sx+sealW,sy+sealW);
+  seal.addColorStop(0,'#b5402f'); seal.addColorStop(1,'#8a2c22');
+  roundRect(g, sx, sy, sealW, sealW, 2.5); g.fillStyle = seal; g.fill();
+  g.lineWidth = 1; g.strokeStyle = 'rgba(246,231,207,.55)';
+  roundRect(g, sx, sy, sealW, sealW, 2.5); g.stroke();
+
+  return g.getImageData(0,0,cv.width,cv.height);
+}
+function roundRect(g,x,y,w,h,r){
+  g.beginPath();
+  g.moveTo(x+r,y); g.arcTo(x+w,y,x+w,y+h,r); g.arcTo(x+w,y+h,x,y+h,r);
+  g.arcTo(x,y+h,x,y,r); g.arcTo(x,y,x+w,y,r); g.closePath();
+}
+
+/* 幂等渲染：首次加源+图层，之后只 setData */
+function renderBooks(){
+  books.forEach(b=>ensureSpine(b, false));
+  if(!map.getSource('books-src')){
+    map.addSource('books-src', {type:'geojson', data:currentFC(),
+      cluster:true, clusterRadius:50, clusterMaxZoom:6});
+    map.addSource('active-src', {type:'geojson', data:FC_EMPTY});
+    map.addSource('arcs-src', {type:'geojson', data:FC_EMPTY});
+    addArcLayers();        // 连线层（位于标记之下）
+    addClusterLayers();    // 标记层（盖在连线之上）
+  }else{
+    refreshSource(true);
+  }
+}
+
+/* 弧线图层（ISSUE-05）：一条静态底线 + 一条动态虚线（流动效果），默认隐藏 */
+function addArcLayers(){
+  map.addLayer({id:'arcs-base', type:'line', source:'arcs-src',
+    layout:{'line-cap':'round','line-join':'round','visibility':'none'},
+    paint:{'line-color':'#b07a26','line-width':2,'line-opacity':0.22}});
+  map.addLayer({id:'arcs-flow', type:'line', source:'arcs-src',
+    layout:{'line-cap':'round','line-join':'round','visibility':'none'},
+    paint:{'line-color':'#d2a23e','line-width':2.2,'line-opacity':0.95,'line-dasharray':[0,4,3]}});
+}
+
+function addClusterLayers(){
+  // 簇圆（按数量分级变大变深）
+  map.addLayer({id:'clusters', type:'circle', source:'books-src', filter:['has','point_count'],
+    paint:{
+      'circle-color':['step',['get','point_count'],'#c2655a',10,'#a7382c',50,'#8a2c22'],
+      'circle-radius':['step',['get','point_count'],16,10,21,50,27],
+      'circle-opacity':0.92,
+      'circle-stroke-width':2,'circle-stroke-color':'rgba(246,231,207,.6)'
+    }});
+  // 簇数量
+  map.addLayer({id:'cluster-count', type:'symbol', source:'books-src', filter:['has','point_count'],
+    layout:{'text-field':['get','point_count_abbreviated'],
+      'text-font':['Noto Sans Bold','Open Sans Bold'],'text-size':13,'text-allow-overlap':true},
+    paint:{'text-color':'#f6e7cf'}});
+  // 单点书脊（直立于坐标点）
+  map.addLayer({id:'unclustered', type:'symbol', source:'books-src', filter:['!',['has','point_count']],
+    layout:{'icon-image':['get','icon'],'icon-size':1,
+      'icon-allow-overlap':true,'icon-anchor':'bottom'}});
+  // 选中书目的书脊（描金变体，始终置顶——即便它在 books-src 里被聚合进了簇）
+  map.addLayer({id:'active-seal', type:'symbol', source:'active-src',
+    layout:{'icon-image':['get','icon'],'icon-size':1.06,
+      'icon-allow-overlap':true,'icon-anchor':'bottom'}});
+
+  wireMapInteractions();
+}
+
+let interactionsWired = false;
+function wireMapInteractions(){
+  if(interactionsWired) return; interactionsWired = true;
+  // 点簇 → 展开缩放
+  map.on('click','clusters',(e)=>{
+    const f = e.features[0];
+    map.getSource('books-src').getClusterExpansionZoom(f.properties.cluster_id, (err,zoom)=>{
+      if(err) return;
+      map.easeTo({center:f.geometry.coordinates, zoom:Math.min((zoom||6)+0.4, 9),
+        pitch:55, duration:900, essential:true});
+    });
+  });
+  // 点单点 → 弹书卡（故事模式下交由旁白接管，不弹卡）
+  map.on('click','unclustered',(e)=>{
+    if(story.on) return;
+    const b = byId.get(e.features[0].properties.id);
+    if(b) openCard(b, true);
+  });
+  // 鼠标手势
+  ['clusters','unclustered'].forEach(L=>{
+    map.on('mouseenter',L,()=>{ map.getCanvas().style.cursor='pointer'; });
+    map.on('mouseleave',L,()=>{ map.getCanvas().style.cursor=''; });
+  });
+}
+
+/* 当前选中书目的高亮（替代旧的 DOM .active）：用描金边书脊变体置顶显示 */
+function setActiveBooks(arr){
+  const src = map.getSource('active-src');
+  if(!src) return;
+  if(!arr || !arr.length){ src.setData(FC_EMPTY); return; }
+  const feats = arr.map(b=>({type:'Feature',
+    geometry:{type:'Point', coordinates:b.coord}, properties:{icon: ensureSpine(b, true)}}));
+  src.setData({type:'FeatureCollection', features:feats});
+}
+function setActive(b){ setActiveBooks(b ? [b] : null); }   // 书卡用：单本高亮
+
+/* ============================ 书卡（浮动在被点书目坐标上方，随地图移动跟随） ============================ */
+const card = document.getElementById('card');
+let cardBook = null;                 // 当前书卡对应的书目，用于实时定位
+function openCard(b, fly){
+  document.getElementById('cvT').textContent = b.t;
+  document.getElementById('ctTitle').textContent = b.t;
+  document.getElementById('ctEn').textContent = b.en;
+  const rate = (typeof b.r === 'number')
+    ? `<span class="rate">豆瓣 ${b.r.toFixed(1)}</span><span class="dot">·</span>`
+    : '';
+  const place = [b.country, b.city].filter(Boolean).join('·');
+  document.getElementById('ctMeta').innerHTML =
+    `${b.a}<span class="dot">·</span>${b.y}<span class="dot">·</span>${rate}${place}`;
+  document.getElementById('ctBlurb').textContent = b.d;
+  // 封面：有图则显示 <img>，加载失败回退到文字封面（不出现裂图）
+  const cvImg = document.getElementById('cvImg'), cvT = document.getElementById('cvT');
+  if(b.cover){
+    cvT.style.display = 'grid';                 // 先显示文字兜底，加载成功再隐藏
+    cvImg.onload  = ()=>{ cvImg.style.display='block'; cvT.style.display='none'; };
+    cvImg.onerror = ()=>{ cvImg.style.display='none'; cvT.style.display='grid'; };
+    cvImg.src = b.cover;
+  }else{
+    cvImg.removeAttribute('src'); cvImg.style.display='none'; cvT.style.display='grid';
+  }
+  // 精彩段落
+  const q = document.getElementById('ctQuote');
+  if(b.quote){ q.textContent = '「' + b.quote + '」'; q.hidden = false; }
+  else { q.textContent = ''; q.hidden = true; }
+  cardBook = b;
+  card.classList.add('show');
+  positionCard();
+  setHash(b.id);                 // 深链同步（ISSUE-09）
+
+  setActive(b);
+  if(fly){
+    map.flyTo({center:b.coord, zoom:5.4, pitch:62, bearing:-14, duration:2200, essential:true});
+  }
+}
+function closeCard(){
+  cardBook = null;
+  card.classList.remove('show');
+  setActive(null);
+  setHash(null);                 // 清除深链
+}
+/* 把书卡放到书目坐标的上方；空间不足则放到下方，并夹在视口内 */
+function positionCard(){
+  if(!cardBook) return;
+  const p = map.project(cardBook.coord);
+  const w = card.offsetWidth, h = card.offsetHeight, gap = 18, m = 8;
+  let left = p.x - w/2;
+  let top  = p.y - h - gap;                 // 默认浮在坐标上方
+  if(top < m) top = p.y + gap;              // 上方放不下 → 放到下方
+  left = Math.max(m, Math.min(left, innerWidth  - w - m));
+  top  = Math.max(m, Math.min(top,  innerHeight - h - m));
+  card.style.left = left + 'px';
+  card.style.top  = top  + 'px';
+}
+map.on('move', positionCard);              // 地图移动/缩放时卡片跟随标记
+addEventListener('resize', positionCard);
+document.getElementById('cardClose').addEventListener('click', closeCard);
+// 点空白处关卡片；点中簇/单点由各自处理器接管，不在此关闭
+map.on('click', (e)=>{
+  if(touring || story.on) return;
+  const hits = map.queryRenderedFeatures(e.point, {layers:['clusters','unclustered']});
+  if(!hits.length) closeCard();
+});
+
+/* ============================ 地区筛选 + 巡游 胶囊 ============================ */
+const chips = document.getElementById('chips');
+regions.forEach(rg=>{
+  const c = document.createElement('button');
+  c.className = 'chip' + (rg===activeRegion?' on':'');
+  c.textContent = rg;
+  c.addEventListener('click', ()=>{
+    activeRegion = rg;
+    [...chips.querySelectorAll('.chip:not(.tour)')].forEach(x=>x.classList.toggle('on', x.textContent===rg));
+    applyFilter();
+  });
+  chips.appendChild(c);
+});
+const arcBtn = document.createElement('button');
+arcBtn.className = 'chip';
+arcBtn.textContent = '连线';
+arcBtn.title = '沿巡礼之路连线（与时间轴/筛选联动）';
+arcBtn.addEventListener('click', toggleArcs);
+chips.appendChild(arcBtn);
+
+const storyBtn = document.createElement('button');
+storyBtn.className = 'chip story-chip';
+storyBtn.textContent = '故事';
+storyBtn.title = '进入章节解说模式';
+storyBtn.addEventListener('click', enterStory);
+chips.appendChild(storyBtn);
+
+const tourBtn = document.createElement('button');
+tourBtn.className = 'chip tour';
+tourBtn.textContent = '开始巡游';
+tourBtn.addEventListener('click', toggleTour);
+chips.appendChild(tourBtn);
+
+function inRegion(b){ return activeRegion==='全部' || b.region===activeRegion; }
+function applyFilter(){
+  if(!map.getSource('books-src')) return;
+  refreshSource(true);                // 地区变了，强制重建（簇随之重新聚合）
+  if(typeof updateYearLabel==='function') updateYearLabel();  // 同步时间轴上的"N 部"计数
+  fitToBooks(visibleList());          // 相机飞到该地区，把当前可见书框进视野
+}
+function fitToBooks(list){
+  if(activeRegion==='全部' || !list.length){
+    map.easeTo({center:[28,32], zoom:2.3, pitch:55, bearing:-10, duration:1200, essential:true});
+    return;
+  }
+  const bb = new maplibregl.LngLatBounds();
+  list.forEach(x=>bb.extend(x.coord));
+  map.fitBounds(bb, {padding:{top:130, bottom:170, left:80, right:80}, maxZoom:5, duration:1300, essential:true});
+}
+
+/* ============================ 时间轴（ISSUE-04） ============================
+   滑块范围 = 数据 min/max 年份；滑到最右 = 全部年代。拖动→按年份增减标记；
+   播放→年份从最早自动推进到最新；可暂停/重置；与地区筛选取交集。 */
+const slider    = document.getElementById('tlRange');
+const yearLabel = document.getElementById('tlYear');
+const playBtn   = document.getElementById('tlPlay');
+const resetBtn  = document.getElementById('tlReset');
+const PLAY_MS   = 14000;             // 一轮"随时间展开"约 14 秒
+let playing = false, playRAF = null;
+
+function initTimeline(){
+  const ys = books.map(b=>b.y).filter(y=>typeof y==='number');
+  if(!ys.length){ const t=document.getElementById('timeline'); if(t) t.style.display='none'; return; }
+  yearMin = Math.min(...ys); yearMax = Math.max(...ys);
+  slider.min = yearMin; slider.max = yearMax; slider.step = 1; slider.value = yearMax;
+  activeYear = yearMax; showAllYears = true;
+  updateYearLabel();
+}
+function updateYearLabel(){
+  const n = visibleList().length;
+  yearLabel.textContent = showAllYears ? `全部 · ${n} 部` : `${activeYear} · ${n} 部`;
+}
+function setYearAll(){
+  showAllYears = true; activeYear = yearMax; slider.value = yearMax;
+  updateYearLabel(); refreshSource();
+}
+function startPlay(){
+  if(yearMax <= yearMin) return;
+  playing = true; pauseIdle(); playBtn.textContent = '⏸'; playBtn.classList.add('on');
+  const from = (showAllYears || activeYear >= yearMax) ? yearMin : activeYear;
+  showAllYears = false;
+  const span = yearMax - from, t0 = performance.now();
+  const tick = (now)=>{
+    if(!playing) return;
+    const k = Math.min((now - t0) / PLAY_MS, 1);
+    const y = Math.round(from + span * k);
+    if(y !== activeYear){
+      activeYear = y; slider.value = y; updateYearLabel(); refreshSource();
+    }
+    if(k >= 1){ stopPlay(); setYearAll(); return; }
+    playRAF = requestAnimationFrame(tick);
+  };
+  playRAF = requestAnimationFrame(tick);
+}
+function stopPlay(){
+  playing = false; if(playRAF) cancelAnimationFrame(playRAF); playRAF = null;
+  playBtn.textContent = '▶'; playBtn.classList.remove('on');
+  resetIdle();
+}
+playBtn.addEventListener('click', ()=>{ playing ? stopPlay() : startPlay(); });
+resetBtn.addEventListener('click', ()=>{ stopPlay(); setYearAll(); });
+slider.addEventListener('input', ()=>{
+  stopPlay();
+  const v = +slider.value;
+  showAllYears = (v >= yearMax);
+  activeYear = v;
+  updateYearLabel(); refreshSource();
+});
+
+/* ============================ 弧线连接（ISSUE-05） ============================
+   沿 tour_order 把书目串成一条"文学巡礼之路"：相邻两书间画大圆弧，动态 dash 形成流动。
+   与时间轴/筛选联动：仅当某段两端的书都"可见"时才画该段（隐藏节点不跨接）。 */
+let arcsOn = false;
+
+/* 两点间大圆弧采样（球面插值，返回 n+1 个 [lng,lat]）—— 比直线更有"航路/丝路"感 */
+function gcPoints(a, b, n){
+  const R = Math.PI/180, D = 180/Math.PI;
+  const lon1=a[0]*R, lat1=a[1]*R, lon2=b[0]*R, lat2=b[1]*R;
+  const d = 2*Math.asin(Math.sqrt(
+    Math.sin((lat2-lat1)/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin((lon2-lon1)/2)**2));
+  if(!d) return [a, b];
+  const pts=[];
+  for(let i=0;i<=n;i++){
+    const f=i/n, A=Math.sin((1-f)*d)/Math.sin(d), B=Math.sin(f*d)/Math.sin(d);
+    const x=A*Math.cos(lat1)*Math.cos(lon1)+B*Math.cos(lat2)*Math.cos(lon2);
+    const y=A*Math.cos(lat1)*Math.sin(lon1)+B*Math.cos(lat2)*Math.sin(lon2);
+    const z=A*Math.sin(lat1)+B*Math.sin(lat2);
+    pts.push([Math.atan2(y,x)*D, Math.atan2(z, Math.hypot(x,y))*D]);
+  }
+  return pts;
+}
+/* 路线 = 有 tour_order 的书按序排列（无则按数组顺序） */
+function routeBooks(){
+  const withOrder = books.filter(b=>b.tour_order!=null).sort((a,b)=>a.tour_order-b.tour_order);
+  return withOrder.length ? withOrder : books;
+}
+function buildArcsFC(list){
+  if(!arcsOn) return FC_EMPTY;
+  const vis = new Set((list||visibleList()).map(b=>b.id));
+  const route = routeBooks(), feats=[];
+  for(let i=0;i<route.length-1;i++){
+    const a=route[i], b=route[i+1];
+    if(vis.has(a.id) && vis.has(b.id)){
+      feats.push({type:'Feature', geometry:{type:'LineString', coordinates:gcPoints(a.coord,b.coord,48)}});
+    }
+  }
+  return {type:'FeatureCollection', features:feats};
+}
+function refreshArcs(list){
+  const s = map.getSource('arcs-src'); if(!s) return;
+  s.setData(buildArcsFC(list));
+}
+function setArcsVisible(v){
+  ['arcs-base','arcs-flow'].forEach(L=>{
+    if(map.getLayer(L)) map.setLayoutProperty(L,'visibility', v?'visible':'none');
+  });
+}
+
+/* 流动 dash：循环切换一组 dasharray（经典做法），仅在连线开启时跑 */
+const DASH_SEQ = [
+  [0,4,3],[0.5,4,2.5],[1,4,2],[1.5,4,1.5],[2,4,1],[2.5,4,0.5],[3,4,0],
+  [0,0.5,3,3.5],[0,1,3,3],[0,1.5,3,2.5],[0,2,3,2],[0,2.5,3,1.5],[0,3,3,1],[0,3.5,3,0.5]
+];
+let dashRAF=null, dashStep=0, dashLast=0;
+function animateDash(ts){
+  if(!arcsOn){ dashRAF=null; return; }
+  if(ts - dashLast > 55){
+    dashLast = ts;
+    if(map.getLayer('arcs-flow'))
+      map.setPaintProperty('arcs-flow','line-dasharray', DASH_SEQ[dashStep % DASH_SEQ.length]);
+    dashStep++;
+  }
+  dashRAF = requestAnimationFrame(animateDash);
+}
+function toggleArcs(){
+  arcsOn = !arcsOn;
+  arcBtn.classList.toggle('on', arcsOn);
+  setArcsVisible(arcsOn);
+  refreshArcs();
+  if(arcsOn && !dashRAF) dashRAF = requestAnimationFrame(animateDash);
+}
+
+/* ============================ 故事 / 章节模式（ISSUE-06） ============================
+   一组章节 = 标题 + 旁白 + 相机（中心/缩放/俯仰/方位）+ 高亮书目 id 列表。
+   进入：飞到该章相机、描金高亮该章书目、底部显示旁白；可上一/下一/自动播放/退出。
+   旁白文字均为原创概述，未抄录任何受版权保护的原文。 */
+const STORY = [
+  { title:'序 · 东方的起点', cam:{center:[116.41,39.90], zoom:4.0, pitch:55, bearing:-10}, books:['b001'],
+    text:'我们的巡礼，从一座安静的园子开始。史铁生在北京地坛的四季里与命运对坐，把身体的残缺，写成了精神的辽阔。就从这里，向世界出发。' },
+  { title:'第一章 · 东方的月色', cam:{center:[131,34.2], zoom:3.4, pitch:52, bearing:0}, books:['b002','b003','b004'],
+    text:'再往东去，是大观园里说不尽的聚散，是平安京月下缓缓铺开的物哀，也是都市雨季里那一声青春的回响。东方的笔墨，写尽了繁华与怅惘。' },
+  { title:'第二章 · 战火与救赎', cam:{center:[52,33], zoom:3.4, pitch:54, bearing:8}, books:['b005','b006'],
+    text:'越过群山，来到风沙与圣殿之间。这里有少年漫长的赎罪之旅，也有一座圣城三千年的爱恨兴衰——文明在伤痕里，依然倔强地生长。' },
+  { title:'第三章 · 魔幻的美洲', cam:{center:[-76.8,24.8], zoom:2.9, pitch:54, bearing:-12}, books:['b007','b008','b009'],
+    text:'渡过大洋，进入一片魔幻与现实交织的土地。家族七代人的孤独在小镇上空盘旋，老渔夫与大海死磕到底，而码头尽头那盏绿灯，照亮了一个时代的纸醉金迷。' },
+  { title:'第四章 · 厚重的欧陆', cam:{center:[12,48.3], zoom:3.1, pitch:54, bearing:6}, books:['b010','b011','b012'],
+    text:'回望欧罗巴，是穿越苦难的音乐家，是拿破仑铁蹄下整个民族的呼吸，也是那位向风车冲锋的骑士。厚重的史诗里，藏着人类不肯低头的灵魂。' },
+  { title:'合卷', cam:{center:[28,32], zoom:2.3, pitch:50, bearing:-10}, books:[],
+    text:'十二部书，跨越千年与万里。它们生于不同的土地，却共同回答着同一个问题——人，该如何活着。合上卷轴，愿你也找到属于自己的那一页。' }
+];
+const STORY_AUTO_MS = 7000;   // 自动播放每章停留
+
+const story = { on:false, i:0, auto:false, timer:null };
+const storyEl    = document.getElementById('story');
+const storyIdx   = document.getElementById('storyIdx');
+const storyTitle = document.getElementById('storyTitle');
+const storyText  = document.getElementById('storyText');
+const storyPlay  = document.getElementById('storyPlay');
+
+function enterStory(){
+  if(story.on) return;
+  story.on = true; pauseIdle();
+  // 停止其它进行中的动作，重置筛选让所有书可见
+  if(touring) toggleTour();
+  stopPlay(); closeCard();
+  activeRegion = '全部';
+  [...chips.querySelectorAll('.chip:not(.tour):not(.story-chip)')].forEach(x=>x.classList.toggle('on', x.textContent==='全部'));
+  showAllYears = true; if(slider){ slider.value = yearMax; updateYearLabel(); }
+  refreshSource(true);
+  document.body.classList.add('story-on');   // CSS 隐藏底栏胶囊 + 时间轴
+  storyEl.hidden = false;
+  story.i = 0;
+  goChapter(0);
+}
+function exitStory(){
+  if(!story.on) return;
+  stopStoryAuto();
+  story.on = false;
+  storyEl.hidden = true;
+  document.body.classList.remove('story-on');
+  setActiveBooks(null);
+  map.easeTo({center:[28,32], zoom:2.3, pitch:55, bearing:-10, duration:1200, essential:true});
+  resetIdle();
+}
+function goChapter(i){
+  story.i = Math.max(0, Math.min(i, STORY.length-1));
+  const ch = STORY[story.i];
+  storyIdx.textContent  = `${story.i+1} / ${STORY.length}`;
+  storyTitle.textContent = ch.title;
+  storyText.textContent  = ch.text;
+  // 相机飞行（curve 缓动）+ 高亮该章书目
+  map.flyTo({...ch.cam, duration:2400, curve:1.5, essential:true});
+  const hl = ch.books.map(id=>byId.get(id)).filter(Boolean);
+  setActiveBooks(hl);
+  // 导航按钮端点禁用态（用透明度示意）
+  document.getElementById('storyPrev').style.opacity = story.i===0 ? .4 : 1;
+  document.getElementById('storyNext').style.opacity = story.i===STORY.length-1 ? .4 : 1;
+}
+function nextChapter(){
+  if(story.i < STORY.length-1) goChapter(story.i+1);
+  else stopStoryAuto();                 // 已是最后一章：自动播放到此结束
+}
+function prevChapter(){ if(story.i>0) goChapter(story.i-1); }
+
+function startStoryAuto(){
+  story.auto = true; storyPlay.textContent = '⏸ 自动'; storyPlay.classList.add('on');
+  scheduleAuto();
+}
+function scheduleAuto(){
+  clearTimeout(story.timer);
+  story.timer = setTimeout(()=>{
+    if(!story.auto) return;
+    if(story.i < STORY.length-1){ goChapter(story.i+1); scheduleAuto(); }
+    else stopStoryAuto();
+  }, STORY_AUTO_MS);
+}
+function stopStoryAuto(){
+  story.auto = false; clearTimeout(story.timer); story.timer = null;
+  storyPlay.textContent = '▶ 自动'; storyPlay.classList.remove('on');
+}
+document.getElementById('storyPrev').addEventListener('click', ()=>{ stopStoryAuto(); prevChapter(); });
+document.getElementById('storyNext').addEventListener('click', ()=>{ stopStoryAuto(); nextChapter(); });
+document.getElementById('storyX').addEventListener('click', exitStory);
+storyPlay.addEventListener('click', ()=>{ story.auto ? stopStoryAuto() : startStoryAuto(); });
+
+/* ============================ 飞行巡游 ============================ */
+let touring = false;
+const wait = ms => new Promise(r=>setTimeout(r, ms));
+async function toggleTour(){
+  if(touring){ touring=false; return; }
+  touring = true; pauseIdle();
+  tourBtn.textContent='停止巡游'; tourBtn.classList.add('running');
+  const route = books.filter(inRegion).sort((a,b)=>{
+    const oa = a.tour_order, ob = b.tour_order;
+    if(oa==null && ob==null) return 0;
+    if(oa==null) return 1;
+    if(ob==null) return -1;
+    return oa - ob;
+  });
+  let bearing = -16;
+  for(const b of route){
+    if(!touring) break;
+    // curve 缓动 + 方位角平滑递进（替代生硬的随机 bearing 跳变）
+    map.flyTo({center:b.coord, zoom:5.2, pitch:62, bearing, duration:2600, curve:1.5, essential:true});
+    bearing += 26;
+    await wait(2700); if(!touring) break;
+    openCard(b, false);
+    await wait(3000);
+  }
+  touring=false; tourBtn.textContent='开始巡游'; tourBtn.classList.remove('running');
+  resetIdle();
+}
+
+/* ============================ ④ 【换天气】 ============================
+   这里用 canvas 粒子模拟雨/雪。Mapbox GL JS v3.9+ 可直接换成原生：
+       map.setRain({density:0.5, ...})  /  map.setSnow({density:0.6, ...})
+   一行调用即可，无需自己写粒子。 */
+const wc = document.getElementById('weather');
+const wx = wc.getContext('2d');
+let mode='clear', parts=[], raf=null;
+function resize(){ wc.width=innerWidth; wc.height=innerHeight; }
+addEventListener('resize', resize); resize();
+
+function seed(){
+  parts = [];
+  const n = mode==='rain'?260 : mode==='snow'?180 : 0;
+  for(let i=0;i<n;i++){
+    parts.push(mode==='rain'
+      ? {x:Math.random()*wc.width, y:Math.random()*wc.height, l:8+Math.random()*12, v:6+Math.random()*6}
+      : {x:Math.random()*wc.width, y:Math.random()*wc.height, r:1.4+Math.random()*2.4, v:0.7+Math.random()*1.3, d:Math.random()*Math.PI*2});
+  }
+}
+function loop(){
+  wx.clearRect(0,0,wc.width,wc.height);
+  if(mode==='rain'){
+    wx.strokeStyle='rgba(120,140,165,.45)'; wx.lineWidth=1.1;
+    parts.forEach(p=>{ wx.beginPath(); wx.moveTo(p.x,p.y); wx.lineTo(p.x-2,p.y+p.l); wx.stroke();
+      p.y+=p.v; p.x-=0.6; if(p.y>wc.height){p.y=-p.l;p.x=Math.random()*wc.width;} });
+  }else if(mode==='snow'){
+    wx.fillStyle='rgba(250,248,242,.85)';
+    parts.forEach(p=>{ wx.beginPath(); wx.arc(p.x,p.y,p.r,0,7); wx.fill();
+      p.d+=0.02; p.y+=p.v; p.x+=Math.sin(p.d)*0.8; if(p.y>wc.height){p.y=-4;p.x=Math.random()*wc.width;} });
+  }
+  raf=requestAnimationFrame(loop);
+}
+function setWeather(m){
+  mode=m; seed();
+  if(raf) cancelAnimationFrame(raf);
+  if(m==='clear'){ wx.clearRect(0,0,wc.width,wc.height); raf=null; }
+  else loop();
+}
+document.querySelectorAll('.weather button').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.weather button').forEach(b=>b.classList.remove('on'));
+    btn.classList.add('on');
+    setWeather(btn.dataset.w);
+  });
+});
+
+/* ============================ 性能模式开关（ISSUE-07） ============================
+   3D 地形 ↔ 流畅平面。平面= setTerrain(null) 并放平俯仰，明显省 GPU；记忆用户选择。
+   localStorage 在本地/托管可用，沙箱预览被禁——用 try/catch 兜底（失败则本次会话内有效）。 */
+let perfMode = 'flat';   // 默认平面（开场即平面）
+const perfBtn = document.getElementById('perfBtn');
+function prefGet(k){ try{ return localStorage.getItem('litmap.'+k); }catch(_){ return null; } }
+function prefSet(k,v){ try{ localStorage.setItem('litmap.'+k, v); }catch(_){ } }
+function updatePerfBtn(){
+  if(!perfBtn) return;
+  perfBtn.textContent = perfMode==='3d' ? '3D 地形' : '平面';
+  perfBtn.classList.toggle('flat', perfMode==='flat');
+}
+function setPerf(mode, save){
+  perfMode = mode;
+  if(mode==='flat'){
+    try{ map.setTerrain(null); }catch(_){}
+    if(map.getPitch() > 38) map.easeTo({pitch:28, duration:700, essential:true});
+  }else{
+    terrainDisabled = false;                                  // 允许重新尝试 DEM
+    try{ map.setTerrain({source:'terrainSource', exaggeration:1.6}); }catch(_){}
+    if(map.getPitch() < 45) map.easeTo({pitch:55, duration:700, essential:true});
+  }
+  updatePerfBtn();
+  if(save) prefSet('perfMode', mode);
+}
+function togglePerf(){ setPerf(perfMode==='3d' ? 'flat' : '3d', true); }
+function markTerrainOff(){ perfMode='flat'; updatePerfBtn(); }   // DEM 失败时由错误处理器调用
+if(perfBtn) perfBtn.addEventListener('click', togglePerf);
+
+/* ============================ 相机（ISSUE-08） ============================
+   开场动画与 idle 自动旋转均已按需求移除；巡游/章节镜头仍用 curve 缓动、方位角平滑递进。 */
+function pauseIdle(){}    // 自动旋转已取消；保留空函数，避免改动各处调用点
+function resetIdle(){}
+
+/* ============================ 搜索 + 深链（ISSUE-09） ============================
+   搜索：按 书名/原名/作者/国家/城市 匹配，命中飞过去并弹卡。
+   深链：#book=ID 打开自动定位；开/关卡片时更新 hash。沙箱里 history/hash 可能受限，全程 try/catch 兜底。 */
+const searchInput   = document.getElementById('searchInput');
+const searchResults = document.getElementById('searchResults');
+let searchHits = [];
+
+function searchBooks(q){
+  q = q.trim().toLowerCase();
+  if(!q) return [];
+  return books.filter(b=>
+    (b.t||'').toLowerCase().includes(q) || (b.en||'').toLowerCase().includes(q) ||
+    (b.a||'').toLowerCase().includes(q) || (b.country||'').toLowerCase().includes(q) ||
+    (b.city||'').toLowerCase().includes(q)
+  ).slice(0, 8);
+}
+function renderResults(){
+  searchResults.innerHTML = '';
+  const q = searchInput.value.trim();
+  if(!q){ searchResults.classList.remove('show'); return; }
+  searchHits = searchBooks(q);
+  if(!searchHits.length){
+    const e = document.createElement('div'); e.className='sr-empty'; e.textContent='没有匹配的书目';
+    searchResults.appendChild(e); searchResults.classList.add('show'); return;
+  }
+  searchHits.forEach(b=>{
+    const it = document.createElement('button'); it.className = 'sr-item';
+    const t = document.createElement('span'); t.className='sr-t'; t.textContent = b.t;
+    const m = document.createElement('span'); m.className='sr-m';
+    m.textContent = [b.a, b.country, b.y].filter(Boolean).join(' · ');
+    it.append(t, m);
+    it.addEventListener('click', ()=> pickResult(b));
+    searchResults.appendChild(it);
+  });
+  searchResults.classList.add('show');
+}
+function pickResult(b){
+  searchResults.classList.remove('show');
+  searchInput.value = b.t;
+  searchInput.blur();
+  openCard(b, true);              // 飞过去 + 弹卡 + 更新 hash
+}
+searchInput.addEventListener('input', renderResults);
+searchInput.addEventListener('keydown', (e)=>{
+  if(e.key === 'Enter' && searchHits.length) pickResult(searchHits[0]);
+  else if(e.key === 'Escape'){ searchInput.value=''; searchResults.classList.remove('show'); searchInput.blur(); }
+});
+// 点搜索框以外的地方收起结果
+document.addEventListener('click', (e)=>{
+  if(!document.getElementById('search').contains(e.target)) searchResults.classList.remove('show');
+});
+
+/* —— 深链 hash —— */
+function setHash(id){
+  try{
+    if(id) history.replaceState(null, '', '#book=' + id);
+    else   history.replaceState(null, '', location.pathname + location.search);
+  }catch(_){
+    try{ location.hash = id ? ('book=' + id) : ''; }catch(__){ /* 沙箱禁用，忽略 */ }
+  }
+}
+function applyHash(){
+  let h = ''; try{ h = location.hash || ''; }catch(_){ return; }
+  const m = h.match(/book=([\w-]+)/);
+  if(m){ const b = byId.get(m[1]); if(b) openCard(b, true); }
+}
+addEventListener('hashchange', applyHash);   // 手动改 hash / 后退键时重新定位
+
+/* ============================ 罗盘玫瑰（ISSUE-10） ============================
+   随地图旋转指北，点击回正北。（边框/经纬网格/氛围面板已按需求移除） */
+const compassEl   = document.getElementById('compass');
+const compassRose = document.getElementById('compassRose');
+function updateCompass(){ compassRose.style.transform = `rotate(${-map.getBearing()}deg)`; }
+map.on('rotate', updateCompass);
+map.on('move', updateCompass);
+compassEl.addEventListener('click', ()=> map.easeTo({bearing:0, duration:600, essential:true}));
+updateCompass();
+</script>

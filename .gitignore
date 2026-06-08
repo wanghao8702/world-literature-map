@@ -1,0 +1,7 @@
+# 大文件 / 参考素材（抖音原视频，勿入库）
+*.mp4
+
+# 操作系统杂项
+.DS_Store
+Thumbs.db
+desktop.ini
