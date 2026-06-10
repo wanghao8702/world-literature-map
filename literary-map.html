@@ -1,11 +1,11 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>世界文学巡礼 · 3D 文学地图脚手架</title>
+<title>卷里山河 · 读万卷书，行万里路</title>
 
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital@0;1&family=Noto+Serif+SC:wght@400;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital@0;1&family=Noto+Serif+SC:wght@400;600;700&family=Ma+Shan+Zheng&display=swap" rel="stylesheet">
 
 <style>
   :root{
@@ -231,8 +231,8 @@
 </div>
 
 <div class="topbar">
-  <h1>世界文学巡礼</h1>
-  <div class="sub">跨越 <b id="ctyN">–</b> 国 · 收录 <b id="bookN">–</b> 部名著</div>
+  <h1>卷里山河</h1>
+  <div class="sub">读万卷书，行万里路 &nbsp;·&nbsp; 跨越 <b id="ctyN">–</b> 国 · 收录 <b id="bookN">–</b> 部名著</div>
   <div class="rule"></div>
 </div>
 
@@ -530,58 +530,66 @@ function drawSpine(title){
   let chars = [...((title||'·').trim())];
   const MAX = 9;
   if(chars.length > MAX){ chars = chars.slice(0, MAX-1); chars.push('…'); }
-  const fs = 18, lineH = Math.round(fs*1.2);         // 字大 / 行高（整数，避免亚像素裁剪）
-  const pad = 10;                                     // 四边内边距
-  const W = fs + pad*2;                               // 书脊等宽 (38)
+
+  const fs = 13, lineH = Math.round(fs * 1.45);  // 19px，字间呼吸感
+  const W = 36;
   const textH = chars.length * lineH;
-  const H = pad*2 + textH + 16;                       // 上下留白 + 字高 + 留白
+  const topH = 9;     // 上内边距
+  const botH = 9;     // 下内边距（书体部分）
+  const pt  = 11;     // 尖底深度（书签尖角）
+  const bodyH = topH + textH + botH;
+  const H = bodyH + pt;
 
   const cv = document.createElement('canvas');
   cv.width  = Math.ceil(W * RS);
   cv.height = Math.ceil(H * RS);
-  if (cv.width <= 0 || cv.height <= 0) return null;   // 防御
+  if (cv.width <= 0 || cv.height <= 0) return null;
   const g = cv.getContext('2d');
   g.scale(RS, RS);
 
-  // ① 线装书底：深墨纸色圆角矩形（无框）
-  g.fillStyle = '#30281c';
-  roundRect(g, 1, 1, W - 2, H - 2, 4);
-  g.fill();
+  // 书签外轮廓路径：圆角顶部 + 尖角底部
+  function bkPath(m) {
+    const r = 3.5;
+    g.beginPath();
+    g.moveTo(m + r, m);
+    g.lineTo(W - m - r, m);
+    g.quadraticCurveTo(W - m, m, W - m, m + r);
+    g.lineTo(W - m, bodyH - m);
+    g.lineTo(W / 2, H - m);        // 中心尖角
+    g.lineTo(m, bodyH - m);
+    g.lineTo(m, m + r);
+    g.quadraticCurveTo(m, m, m + r, m);
+    g.closePath();
+  }
 
-  // ② 穿线孔（上下各两个淡金小圆）
-  g.fillStyle = 'rgba(200, 182, 140, 0.3)';
-  const holes = [pad, H - pad];
-  holes.forEach(y => {
-    g.beginPath(); g.arc(12, y, 1.6, 0, Math.PI * 2); g.fill();
-    g.beginPath(); g.arc(W - 12, y, 1.6, 0, Math.PI * 2); g.fill();
-  });
+  // ① 阴影
+  g.shadowColor = 'rgba(20, 8, 4, 0.45)';
+  g.shadowBlur = 5; g.shadowOffsetX = 1.5; g.shadowOffsetY = 2.5;
 
-  // ③ 书名题签：米白纸条贴于深色书函上（无描边框）
-  const tx = 3, ty = pad - 4, tw = W - 6, th = textH + 10;
-  g.fillStyle = '#f5efdc';
-  roundRect(g, tx, ty, tw, Math.ceil(th), 3);
-  g.fill();
+  // ② 底色（近白高透，书名更显）
+  bkPath(0.5);
+  const bg = g.createLinearGradient(0, 0, W, 0);
+  bg.addColorStop(0, 'rgba(252,250,247,0.72)'); bg.addColorStop(0.5, 'rgba(248,245,240,0.72)'); bg.addColorStop(1, 'rgba(242,238,232,0.72)');
+  g.fillStyle = bg; g.fill();
 
-  // ④ 竖排墨字书名
-  g.fillStyle = '#1e1810';
-  g.font = `600 ${fs}px "Noto Serif SC", "Songti SC", "STSong", "SimSun", serif`;
-  g.textAlign = 'center';
-  g.textBaseline = 'middle';
-  const cx = W / 2;
-  const baseY = ty + 6 + lineH / 2;
-  chars.forEach((ch, i) => g.fillText(ch, cx, baseY + i * lineH));
+  // 清除阴影，准备内容
+  g.shadowColor = 'transparent'; g.shadowBlur = 0; g.shadowOffsetX = 0; g.shadowOffsetY = 0;
 
-  // ⑤ 朱砂方印（底部居中）
-  const sealS = 10;
-  const sx = (W - sealS) / 2, sy = ty + th + 5;
-  g.fillStyle = '#b5402f';
-  roundRect(g, sx, sy, sealS, sealS, 2.5);
-  g.fill();
-  g.fillStyle = '#f6e9d2';
-  g.font = '700 8px serif';
-  g.textAlign = 'center';
-  g.textBaseline = 'middle';
-  g.fillText('書', sx + sealS / 2, sy + sealS / 2);
+  // ③ 裁剪到书签形内绘制文字
+  g.save();
+  bkPath(0.5); g.clip();
+
+  // 竖排字（手写加粗，Claude 暖深红）
+  g.fillStyle = '#B8473A';
+  g.font = `700 ${fs}px "Ma Shan Zheng", "KaiTi", "STKaiti", "楷体", serif`;
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  chars.forEach((ch, i) => g.fillText(ch, W / 2, topH + i * lineH + lineH / 2));
+
+  g.restore();
+
+  // ④ 细边框（灰棕极淡）
+  bkPath(0.5);
+  g.strokeStyle = 'rgba(80, 70, 60, 0.28)'; g.lineWidth = 0.7; g.stroke();
 
   return g.getImageData(0, 0, cv.width, cv.height);
 }
@@ -595,8 +603,7 @@ function roundRect(g,x,y,w,h,r){
 function renderBooks(){
   books.forEach(b=>ensureSpine(b));
   if(!map.getSource('books-src')){
-    map.addSource('books-src', {type:'geojson', data:currentFC(),
-      cluster:true, clusterRadius:38, clusterMaxZoom:4.5});
+    map.addSource('books-src', {type:'geojson', data:currentFC()});
     map.addSource('active-src', {type:'geojson', data:FC_EMPTY});
     map.addSource('arcs-src', {type:'geojson', data:FC_EMPTY});
     addArcLayers();        // 连线层（位于标记之下）
@@ -671,24 +678,11 @@ async function loadLandmarks(){
 }
 
 function addClusterLayers(){
-  // 簇圆（按数量分级变大变深）
-  map.addLayer({id:'clusters', type:'circle', source:'books-src', filter:['has','point_count'],
-    paint:{
-      'circle-color':['step',['get','point_count'],'#c2655a',10,'#a7382c',50,'#8a2c22'],
-      'circle-radius':['step',['get','point_count'],16,10,21,50,27],
-      'circle-opacity':0.92,
-      'circle-stroke-width':2,'circle-stroke-color':'rgba(246,231,207,.6)'
-    }});
-  // 簇数量
-  map.addLayer({id:'cluster-count', type:'symbol', source:'books-src', filter:['has','point_count'],
-    layout:{'text-field':['get','point_count_abbreviated'],
-      'text-font':['Noto Sans Bold','Open Sans Bold'],'text-size':13,'text-allow-overlap':true},
-    paint:{'text-color':'#f6e7cf'}});
-  // 单点书脊（直立于坐标点）
-  map.addLayer({id:'unclustered', type:'symbol', source:'books-src', filter:['!',['has','point_count']],
+  // 书脊图标（所有书目直接显示，不聚合）
+  map.addLayer({id:'unclustered', type:'symbol', source:'books-src',
     layout:{'icon-image':['get','icon'],'icon-size':1,
       'icon-allow-overlap':true,'icon-anchor':'bottom'}});
-  // 选中书目的书脊（描金变体，始终置顶——即便它在 books-src 里被聚合进了簇）
+  // 选中书目的书脊（描金高亮，始终置顶）
   map.addLayer({id:'active-seal', type:'symbol', source:'active-src',
     layout:{'icon-image':['get','icon'],'icon-size':1.15,
       'icon-allow-overlap':true,'icon-anchor':'bottom'}});
@@ -699,23 +693,14 @@ function addClusterLayers(){
 let interactionsWired = false;
 function wireMapInteractions(){
   if(interactionsWired) return; interactionsWired = true;
-  // 点簇 → 展开缩放
-  map.on('click','clusters',(e)=>{
-    const f = e.features[0];
-    map.getSource('books-src').getClusterExpansionZoom(f.properties.cluster_id, (err,zoom)=>{
-      if(err) return;
-      map.easeTo({center:f.geometry.coordinates, zoom:Math.min((zoom||6)+0.4, 9),
-        pitch:55, duration:900, essential:true});
-    });
-  });
-  // 点单点 → 弹书卡（故事模式下交由旁白接管，不弹卡）
+  // 点书脊 → 弹书卡（故事模式下交由旁白接管，不弹卡）
   map.on('click','unclustered',(e)=>{
     if(story.on) return;
     const b = byId.get(e.features[0].properties.id);
     if(b) openCard(b, true);
   });
   // 鼠标手势
-  ['clusters','unclustered'].forEach(L=>{
+  ['unclustered'].forEach(L=>{
     map.on('mouseenter',L,()=>{ map.getCanvas().style.cursor='pointer'; });
     map.on('mouseleave',L,()=>{ map.getCanvas().style.cursor=''; });
   });
@@ -795,7 +780,7 @@ document.getElementById('cardClose').addEventListener('click', closeCard);
 // 点空白处关卡片；点中簇/单点由各自处理器接管，不在此关闭
 map.on('click', (e)=>{
   if(touring || story.on) return;
-  const hits = map.queryRenderedFeatures(e.point, {layers:['clusters','unclustered']});
+  const hits = map.queryRenderedFeatures(e.point, {layers:['unclustered']});
   if(!hits.length) closeCard();
 });
 
