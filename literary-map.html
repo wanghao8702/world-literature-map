@@ -516,12 +516,13 @@ function refreshSource(force){
 const spineImages = new Set();
 function spineId(b){ return 'spine-' + b.id; }
 function ensureSpine(b){
-  // active 态不再做单独的描金图标（新设计无框），active-seal 图层的 icon-size:1.15 负责高亮
   const id = spineId(b);
   if(spineImages.has(id)) return id;
   if(map.hasImage(id)){ spineImages.add(id); return id; }
-  map.addImage(id, drawSpine(b.t), {pixelRatio:2});
-  spineImages.add(id);
+  try {
+    const data = drawSpine(b.t);
+    if (data) { map.addImage(id, data, { pixelRatio: 2 }); spineImages.add(id); }
+  } catch(e) { console.warn('[book] 书脊生成失败:', b.id, b.t, e.message); }
   return id;
 }
 function drawSpine(title){
@@ -529,46 +530,60 @@ function drawSpine(title){
   let chars = [...((title||'·').trim())];
   const MAX = 9;
   if(chars.length > MAX){ chars = chars.slice(0, MAX-1); chars.push('…'); }
-  const fs = 18, lh = fs*1.2;                        // 字大 / 行高
-  const px = 10, py = 10;                            // 题签内边距
-  const sealW = 10, sealGap = 6;                     // 朱砂方印尺寸 / 距题字间距
-  const W = fs + px*2;                               // 书脊等宽
-  const H = py*2 + chars.length*lh + sealGap + sealW;
+  const fs = 18, lineH = Math.round(fs*1.2);         // 字大 / 行高（整数，避免亚像素裁剪）
+  const pad = 10;                                     // 四边内边距
+  const W = fs + pad*2;                               // 书脊等宽 (38)
+  const textH = chars.length * lineH;
+  const H = pad*2 + textH + 16;                       // 上下留白 + 字高 + 留白
 
   const cv = document.createElement('canvas');
-  cv.width = W*RS; cv.height = H*RS;
-  const g = cv.getContext('2d'); g.scale(RS,RS);
+  cv.width  = Math.ceil(W * RS);
+  cv.height = Math.ceil(H * RS);
+  if (cv.width <= 0 || cv.height <= 0) return null;   // 防御
+  const g = cv.getContext('2d');
+  g.scale(RS, RS);
 
-  // ① 线装书底(深墨纸色，有微妙纹理)
-  const bg = g.createLinearGradient(0,0,W,0);
-  bg.addColorStop(0,'#2c281e'); bg.addColorStop(0.3,'#3a3428'); bg.addColorStop(0.7,'#363024'); bg.addColorStop(1,'#2a241a');
-  roundRect(g, 0, 0.5, W, H-1, 4); g.fillStyle = bg; g.fill();
+  // ① 线装书底：深墨纸色圆角矩形（无框）
+  g.fillStyle = '#30281c';
+  roundRect(g, 1, 1, W - 2, H - 2, 4);
+  g.fill();
 
-  // ② 穿线孔(上下各两个小圆，模拟古籍线装)
-  g.fillStyle = 'rgba(200,182,140,.36)';
-  [py-2, H-py-2].forEach(y=>{ g.beginPath(); g.arc(W*0.3, y, 1.8, 0, Math.PI*2); g.fill(); g.beginPath(); g.arc(W*0.7, y, 1.8, 0, Math.PI*2); g.fill(); });
+  // ② 穿线孔（上下各两个淡金小圆）
+  g.fillStyle = 'rgba(200, 182, 140, 0.3)';
+  const holes = [pad, H - pad];
+  holes.forEach(y => {
+    g.beginPath(); g.arc(12, y, 1.6, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.arc(W - 12, y, 1.6, 0, Math.PI * 2); g.fill();
+  });
 
-  // ③ 书名题签(米白纸条贴在深色书函上，朴素不描框——去掉了黄框)
-  const lx = 2.5, ly = py-2, lw = W-5, labelH = chars.length*lh + 6;
-  const label = g.createLinearGradient(0,ly,0,ly+labelH);
-  label.addColorStop(0,'#f5efdc'); label.addColorStop(1,'#ebe0bd');
-  roundRect(g, lx, ly, lw, labelH, 3); g.fillStyle = label; g.fill();
+  // ③ 书名题签：米白纸条贴于深色书函上（无描边框）
+  const tx = 3, ty = pad - 4, tw = W - 6, th = textH + 10;
+  g.fillStyle = '#f5efdc';
+  roundRect(g, tx, ty, tw, Math.ceil(th), 3);
+  g.fill();
 
-  // ④ 竖排墨字书名(宋体，更大更清晰)
+  // ④ 竖排墨字书名
   g.fillStyle = '#1e1810';
-  g.font = `600 ${fs}px "Noto Serif SC","Songti SC","STSong","SimSun",serif`;
-  g.textAlign = 'center'; g.textBaseline = 'middle';
-  const cx = W/2;
-  chars.forEach((ch,i)=> g.fillText(ch, cx, py-2 + 3 + i*lh + lh/2));
+  g.font = `600 ${fs}px "Noto Serif SC", "Songti SC", "STSong", "SimSun", serif`;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  const cx = W / 2;
+  const baseY = ty + 6 + lineH / 2;
+  chars.forEach((ch, i) => g.fillText(ch, cx, baseY + i * lineH));
 
-  // ⑤ 朱砂方印(比之前更醒目，红色系)
-  const sx = (W-sealW)/2, sy = py-2 + labelH + sealGap;
-  g.fillStyle = '#b5402f'; roundRect(g, sx, sy, sealW, sealW, 2.5); g.fill();
-  // 印中白色阳文(简笔"书"字意象)
-  g.fillStyle = '#f6e9d2'; g.font = `700 8px serif`; g.textAlign='center'; g.textBaseline='middle';
-  g.fillText('書', sx+sealW/2, sy+sealW/2);
+  // ⑤ 朱砂方印（底部居中）
+  const sealS = 10;
+  const sx = (W - sealS) / 2, sy = ty + th + 5;
+  g.fillStyle = '#b5402f';
+  roundRect(g, sx, sy, sealS, sealS, 2.5);
+  g.fill();
+  g.fillStyle = '#f6e9d2';
+  g.font = '700 8px serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText('書', sx + sealS / 2, sy + sealS / 2);
 
-  return g.getImageData(0,0,cv.width,cv.height);
+  return g.getImageData(0, 0, cv.width, cv.height);
 }
 function roundRect(g,x,y,w,h,r){
   g.beginPath();
