@@ -515,54 +515,58 @@ function refreshSource(force){
    按书 id 缓存；选中态(active)换描金边变体。竖排整书名 → 辨识度高、有古籍艺术感。 */
 const spineImages = new Set();
 function spineId(b){ return 'spine-' + b.id; }
-function spineActiveId(b){ return 'spine-' + b.id + '-on'; }
-function ensureSpine(b, active){
-  const id = active ? spineActiveId(b) : spineId(b);
+function ensureSpine(b){
+  // active 态不再做单独的描金图标（新设计无框），active-seal 图层的 icon-size:1.15 负责高亮
+  const id = spineId(b);
   if(spineImages.has(id)) return id;
   if(map.hasImage(id)){ spineImages.add(id); return id; }
-  map.addImage(id, drawSpine(b.t, active), {pixelRatio:2});
+  map.addImage(id, drawSpine(b.t), {pixelRatio:2});
   spineImages.add(id);
   return id;
 }
-function drawSpine(title, active){
-  const RS = 2;                                   // 渲染 2x，配合 pixelRatio:2
+function drawSpine(title){
+  const RS = 2;
   let chars = [...((title||'·').trim())];
   const MAX = 9;
   if(chars.length > MAX){ chars = chars.slice(0, MAX-1); chars.push('…'); }
-  const cs = 17, lh = cs*1.16;                    // 字号 / 行高（逻辑像素）
-  const sidePad = 7, padTop = 8, padBottom = 8;
-  const sealGap = 5, sealW = 9;                   // 墨字与朱砂小印之间的间距 / 印的尺寸
-  const W = cs + sidePad*2;
-  const textH = chars.length*lh;
-  const H = padTop + textH + sealGap + sealW + padBottom;
+  const fs = 18, lh = fs*1.2;                        // 字大 / 行高
+  const px = 10, py = 10;                            // 题签内边距
+  const sealW = 10, sealGap = 6;                     // 朱砂方印尺寸 / 距题字间距
+  const W = fs + px*2;                               // 书脊等宽
+  const H = py*2 + chars.length*lh + sealGap + sealW;
 
   const cv = document.createElement('canvas');
   cv.width = W*RS; cv.height = H*RS;
   const g = cv.getContext('2d'); g.scale(RS,RS);
 
-  // ① 题签（半透明奶白纸条，无深色外框）
-  const label = g.createLinearGradient(0,0,0,H);
-  label.addColorStop(0,'rgba(241,229,204,.82)'); label.addColorStop(1,'rgba(224,206,166,.82)');
-  roundRect(g, 0.6, 0.6, W-1.2, H-1.2, 5); g.fillStyle = label; g.fill();
-  // 极细描边：常态低调暖色，选中态描金高亮（非黑框）
-  g.lineWidth = active ? 2 : 1;
-  g.strokeStyle = active ? '#d8b24e' : 'rgba(120,96,60,.45)';
-  roundRect(g, 0.6, 0.6, W-1.2, H-1.2, 5); g.stroke();
+  // ① 线装书底(深墨纸色，有微妙纹理)
+  const bg = g.createLinearGradient(0,0,W,0);
+  bg.addColorStop(0,'#2c281e'); bg.addColorStop(0.3,'#3a3428'); bg.addColorStop(0.7,'#363024'); bg.addColorStop(1,'#2a241a');
+  roundRect(g, 0, 0.5, W, H-1, 4); g.fillStyle = bg; g.fill();
 
-  // ② 竖排墨字书名
-  g.fillStyle = '#2c2014';
-  g.font = `600 ${cs}px "Noto Serif SC","Songti SC","STSong",serif`;
+  // ② 穿线孔(上下各两个小圆，模拟古籍线装)
+  g.fillStyle = 'rgba(200,182,140,.36)';
+  [py-2, H-py-2].forEach(y=>{ g.beginPath(); g.arc(W*0.3, y, 1.8, 0, Math.PI*2); g.fill(); g.beginPath(); g.arc(W*0.7, y, 1.8, 0, Math.PI*2); g.fill(); });
+
+  // ③ 书名题签(米白纸条贴在深色书函上，朴素不描框——去掉了黄框)
+  const lx = 2.5, ly = py-2, lw = W-5, labelH = chars.length*lh + 6;
+  const label = g.createLinearGradient(0,ly,0,ly+labelH);
+  label.addColorStop(0,'#f5efdc'); label.addColorStop(1,'#ebe0bd');
+  roundRect(g, lx, ly, lw, labelH, 3); g.fillStyle = label; g.fill();
+
+  // ④ 竖排墨字书名(宋体，更大更清晰)
+  g.fillStyle = '#1e1810';
+  g.font = `600 ${fs}px "Noto Serif SC","Songti SC","STSong","SimSun",serif`;
   g.textAlign = 'center'; g.textBaseline = 'middle';
-  const cx = W/2, top = padTop + lh/2;
-  chars.forEach((ch,i)=> g.fillText(ch, cx, top + i*lh));
+  const cx = W/2;
+  chars.forEach((ch,i)=> g.fillText(ch, cx, py-2 + 3 + i*lh + lh/2));
 
-  // ③ 底部朱砂小印（红色点睛，呼应古籍钤印）
-  const sx = (W-sealW)/2, sy = padTop + textH + sealGap;
-  const seal = g.createLinearGradient(sx,sy,sx+sealW,sy+sealW);
-  seal.addColorStop(0,'#b5402f'); seal.addColorStop(1,'#8a2c22');
-  roundRect(g, sx, sy, sealW, sealW, 2.5); g.fillStyle = seal; g.fill();
-  g.lineWidth = 1; g.strokeStyle = 'rgba(246,231,207,.55)';
-  roundRect(g, sx, sy, sealW, sealW, 2.5); g.stroke();
+  // ⑤ 朱砂方印(比之前更醒目，红色系)
+  const sx = (W-sealW)/2, sy = py-2 + labelH + sealGap;
+  g.fillStyle = '#b5402f'; roundRect(g, sx, sy, sealW, sealW, 2.5); g.fill();
+  // 印中白色阳文(简笔"书"字意象)
+  g.fillStyle = '#f6e9d2'; g.font = `700 8px serif`; g.textAlign='center'; g.textBaseline='middle';
+  g.fillText('書', sx+sealW/2, sy+sealW/2);
 
   return g.getImageData(0,0,cv.width,cv.height);
 }
@@ -574,10 +578,10 @@ function roundRect(g,x,y,w,h,r){
 
 /* 幂等渲染：首次加源+图层，之后只 setData */
 function renderBooks(){
-  books.forEach(b=>ensureSpine(b, false));
+  books.forEach(b=>ensureSpine(b));
   if(!map.getSource('books-src')){
     map.addSource('books-src', {type:'geojson', data:currentFC(),
-      cluster:true, clusterRadius:50, clusterMaxZoom:6});
+      cluster:true, clusterRadius:38, clusterMaxZoom:4.5});
     map.addSource('active-src', {type:'geojson', data:FC_EMPTY});
     map.addSource('arcs-src', {type:'geojson', data:FC_EMPTY});
     addArcLayers();        // 连线层（位于标记之下）
@@ -671,7 +675,7 @@ function addClusterLayers(){
       'icon-allow-overlap':true,'icon-anchor':'bottom'}});
   // 选中书目的书脊（描金变体，始终置顶——即便它在 books-src 里被聚合进了簇）
   map.addLayer({id:'active-seal', type:'symbol', source:'active-src',
-    layout:{'icon-image':['get','icon'],'icon-size':1.06,
+    layout:{'icon-image':['get','icon'],'icon-size':1.15,
       'icon-allow-overlap':true,'icon-anchor':'bottom'}});
 
   wireMapInteractions();
@@ -708,7 +712,7 @@ function setActiveBooks(arr){
   if(!src) return;
   if(!arr || !arr.length){ src.setData(FC_EMPTY); return; }
   const feats = arr.map(b=>({type:'Feature',
-    geometry:{type:'Point', coordinates:b.coord}, properties:{icon: ensureSpine(b, true)}}));
+    geometry:{type:'Point', coordinates:b.coord}, properties:{icon: ensureSpine(b)}}));
   src.setData({type:'FeatureCollection', features:feats});
 }
 function setActive(b){ setActiveBooks(b ? [b] : null); }   // 书卡用：单本高亮
