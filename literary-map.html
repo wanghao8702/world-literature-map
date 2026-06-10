@@ -299,6 +299,7 @@
    届时请用本地静态服务器（如 `python -m http.server`）打开，或托管后访问。 */
 const DATA_URL = 'books.geojson';          // 地理索引层（坐标 + 基础元数据）
 const CONTENT_URL = 'books-content.json';   // 富内容层（简介/精彩段落/封面/外链，按 id 关联）
+const LANDMARK_URL = 'landmarks.geojson';   // 地标插画（圆形水墨徽章）
 let books = [];   // 加载完成后填充
 
 /* GeoJSON Feature → 内部书对象（geometry.coordinates → coord，properties 平铺映射） */
@@ -425,6 +426,7 @@ async function loadBooks(){
     await loadContent();     // 合并富内容（简介/精彩段落/封面/外链）
     renderStats();
     renderBooks();
+    loadLandmarks();    // 地标水墨徽章（异步加载插画，缺图自动跳过）
     initTimeline();
     hideLoading();
     applyHash();        // 深链定位（ISSUE-09）：带 #book=ID 打开时自动弹卡
@@ -593,6 +595,60 @@ function addArcLayers(){
   map.addLayer({id:'arcs-flow', type:'line', source:'arcs-src',
     layout:{'line-cap':'round','line-join':'round','visibility':'none'},
     paint:{'line-color':'#d2a23e','line-width':2.2,'line-opacity':0.95,'line-dasharray':[0,4,3]}});
+}
+
+/* ============================ 地标插画（免框透明标志） ============================
+   每个地标一张白底水彩画 → 浏览器里把白底抠成透明（从四边洪泛清除相连的近白像素，
+   保留主体内部的白），得到免框透明标志，注册为 GPU 图标。
+   纯装饰、不绑点击；随缩放长出来（世界视角隐藏，飞近才显），置于书脊之下、立在坐标上。 */
+function cutoutIcon(img){
+  const MAX = 320;
+  const sc = Math.min(MAX/img.width, MAX/img.height, 1);
+  const w = Math.max(1, Math.round(img.width*sc)), h = Math.max(1, Math.round(img.height*sc));
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const g = cv.getContext('2d'); g.drawImage(img, 0, 0, w, h);
+  const im = g.getImageData(0, 0, w, h), d = im.data;
+  const isBg = (i)=>{ const r=d[i], gg=d[i+1], b=d[i+2];
+    return Math.min(r,gg,b) > 224 && (Math.max(r,gg,b)-Math.min(r,gg,b)) < 20; };   // 近白、低彩度
+  const seen = new Uint8Array(w*h), stack = [];
+  const push = (x,y)=>{ if(x<0||y<0||x>=w||y>=h) return; const p=y*w+x; if(seen[p]) return; seen[p]=1; stack.push(p); };
+  for(let x=0;x<w;x++){ push(x,0); push(x,h-1); }
+  for(let y=0;y<h;y++){ push(0,y); push(w-1,y); }
+  while(stack.length){
+    const p = stack.pop(), i = p*4;
+    if(!isBg(i)) continue;                 // 碰到主体就停，不再向内扩散
+    d[i+3] = 0;                            // 背景像素 → 透明
+    const x = p % w, y = (p/w)|0;
+    push(x+1,y); push(x-1,y); push(x,y+1); push(x,y-1);
+  }
+  g.putImageData(im, 0, 0);
+  return g.getImageData(0, 0, w, h);
+}
+async function loadLandmarks(){
+  let gj;
+  try{ const r = await fetch(LANDMARK_URL, {cache:'no-cache'}); if(!r.ok) throw 0; gj = await r.json(); }
+  catch(_){ return; }                                  // 没有该文件就跳过
+  const feats = (gj && gj.features) || [];
+  if(!feats.length) return;
+  if(!map.getSource('landmarks-src')){
+    map.addSource('landmarks-src', {type:'geojson', data:FC_EMPTY});
+    const beforeId = map.getLayer('arcs-base') ? 'arcs-base' : undefined;   // 置于连线/书脊之下
+    map.addLayer({id:'landmarks', type:'symbol', source:'landmarks-src',
+      layout:{ 'icon-image':['get','icon'], 'icon-anchor':'bottom', 'icon-allow-overlap':true,
+        'icon-size':['interpolate',['linear'],['zoom'], 2.6,0, 3.4,0.7, 5,1.6, 7,2.2, 9,2.6] }}, beforeId);
+  }
+  const shown = [];
+  feats.forEach(f=>{
+    const p = f.properties || {}, iconId = 'lm-'+p.id;
+    const img = new Image();
+    img.onload = ()=>{
+      if(!map.hasImage(iconId)) map.addImage(iconId, cutoutIcon(img), {pixelRatio:2});
+      shown.push({type:'Feature', geometry:f.geometry, properties:{icon:iconId}});
+      const s = map.getSource('landmarks-src'); if(s) s.setData({type:'FeatureCollection', features:shown});
+    };
+    img.onerror = ()=>{};                              // 缺图跳过，不报错
+    img.src = 'illustrations/' + p.img;
+  });
 }
 
 function addClusterLayers(){
